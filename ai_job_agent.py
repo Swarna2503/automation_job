@@ -39,7 +39,7 @@ PREFS = {
 
     "blocked_companies": [
         # Add company names here to skip them (e.g. "Dice", "Jobot")
-        "jobot", "dice", "hirequest",
+        "jobot", "dice", "hirequest", "indeed.com"
     ],
 }
 
