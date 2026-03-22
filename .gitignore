@@ -1,2 +1,8 @@
 venv/
 .env
+.DS_Store
+__pycache__/
+*.pyc
+.pytest_cache/
+*.log
+usa_jobs_ranked_full.csv  # Don't commit job data

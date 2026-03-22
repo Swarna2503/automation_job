@@ -43,16 +43,16 @@ PREFS = {
 }
 
 MY_PROFILE = {
-    "first_name": "First Name",
-    "last_name": "Last Name",
-    "email": "Email",
-    "phone": "Phone Number",
-    "linkedin": "https://www.linkedin.com/in/",
-    "github": "https://github.com/",
-    "portfolio": "https://swarna2503.github.io/",
-    "address": "Address",
-    "country": "United States",                
-    "resume_path": os.path.expanduser("Resume.pdf") 
+    "first_name": os.getenv("PROFILE_FIRST_NAME", "Unknown"),
+    "last_name": os.getenv("PROFILE_LAST_NAME", "Unknown"),
+    "email": os.getenv("PROFILE_EMAIL"),
+    "phone": os.getenv("PROFILE_PHONE"),
+    "linkedin": os.getenv("PROFILE_LINKEDIN"),
+    "github": os.getenv("PROFILE_GITHUB"),
+    "portfolio": os.getenv("PROFILE_PORTFOLIO"),
+    "address": os.getenv("PROFILE_ADDRESS"),
+    "country": os.getenv("PROFILE_COUNTRY", "United States"),
+    "resume_path": os.getenv("RESUME_PATH", "resume.pdf")
 }
 
 JOB_TITLES = [
