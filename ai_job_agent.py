@@ -9,20 +9,10 @@ from google.genai import types
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 import sys
-
-# ==========================================
-# ⚙️ INITIALIZATION
-# ==========================================
 load_dotenv()
 SERPAPI_KEY = os.getenv("SERPAPI_KEY")
 client      = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
-
-# Note: If this throws an AI parsing error, change it to "gemini-2.0-flash" or "gemini-1.5-flash"
 MODEL_ID    = "gemini-2.5-flash" 
-
-# ==========================================
-# ⚙️ CONFIGURATION & PROFILE
-# ==========================================
 MAX_SERPAPI_CALLS = 5  
 
 PREFS = {
@@ -84,9 +74,6 @@ CLEARANCE_PATTERNS = [r'\bts/sci\b', r'\btop secret\b', r'\bsecurity clearance\b
 NO_SPONSORSHIP_PATTERNS = [r'\bno\s+(visa\s+)?sponsorship\b', r'\bwill not\s+sponsor\b', r'\bcannot\s+sponsor\b', r'\bno\s+h.?1.?b\b', r'\bno\s+opt\b', r'\bno\s+cpt\b']
 SPONSORSHIP_FRIENDLY_SIGNALS = [r'\be.?verify\b', r'\bopt\b', r'\bcpt\b', r'\bh.?1.?b\b', r'\bvisa sponsorship\s*(is\s*)?(available|provided|offered)\b', r'\buniversity\s+(hire|grad|graduate)\b']
 
-# ==========================================
-# 🔍 PHASE 1: FETCH & FILTER
-# ==========================================
 def hard_filter(job: dict) -> tuple[bool, str]:
     title       = (job.get("title", "") or "").lower()
     company     = (job.get("company_name", "") or "").lower()
@@ -189,10 +176,6 @@ def find_jobs_blitz():
         
     return all_jobs
 
-# ==========================================
-# 🧠 PHASE 2: AI SCORER
-# ==========================================
-
 def visa_bonus(text: str) -> int:
     """Returns 0–15 bonus points for sponsorship-friendly signals."""
     t = text.lower()
@@ -275,9 +258,6 @@ JOB TEXT (Truncated):
             "reason": f"AI Parsing Error: {e}"
         }
 
-# ==========================================
-# 🧠 RUN SCRAPER AGENT (PRODUCT UI EDITION)
-# ==========================================
 def run_scraper_agent():
     raw_jobs = find_jobs_blitz()
     if not raw_jobs: 
@@ -288,26 +268,22 @@ def run_scraper_agent():
     print("━"*60)
     
     all_results = []
-    skills_counter = {} # For generating the end-of-run Insight
+    skills_counter = {} 
     
     for job in raw_jobs:
         title = job.get("title", "Unknown")
         company = job.get("company_name", "Unknown")
-        
-        # --- 1. Hard Filter ---
         rejected, reason = hard_filter(job)
         if rejected:
             print(f" ❌ Skipped: {company[:15]:<15} | {title[:20]:<20} -> Reason: {reason}")
             continue
         
-        # --- 2. Regex Skills ---
         full_text = get_full_text(job)
         skill_n, skill_list = regex_skill_count(full_text)
         if skill_n < 3:
             print(f" ⚠️  Skipped: {company[:15]:<15} | {title[:20]:<20} -> Reason: Only {skill_n} relevant skills")
             continue 
         
-        # --- 3. AI Scoring ---
         ai_data = ai_score_job(full_text, skill_list, title)
         score = ai_data.get("score", 0)
         
@@ -320,7 +296,6 @@ def run_scraper_agent():
                 "apply_link": get_apply_link(job),
                 "reason": ai_data.get("reason", "")
             })
-            # Count skills for insight
             for s in skill_list:
                 skills_counter[s] = skills_counter.get(s, 0) + 1
         else:
@@ -336,7 +311,6 @@ def run_scraper_agent():
     print("━"*60)
     print(f"✅ Saved {len(all_results)} highly qualified leads.")
     
-    # 🔥 The "Insight" Generator
     if all_results and skills_counter:
         top_skills = sorted(skills_counter.items(), key=lambda x: x[1], reverse=True)[:3]
         skill_names = [s[0] for s in top_skills]
@@ -344,15 +318,7 @@ def run_scraper_agent():
         
     return all_results
 
-# ==========================================
-# 🤖 PHASE 3: HUMAN-IN-THE-LOOP APPLIER
-# ==========================================
-import csv
-from playwright.sync_api import sync_playwright
 
-# ==========================================
-# 🚀 PHASE 3: APPLY (HUMAN-IN-THE-LOOP)
-# ==========================================
 def human_in_the_loop_apply():
     jobs = []
     try:
@@ -381,72 +347,48 @@ def human_in_the_loop_apply():
         for i, row in enumerate(jobs):
             print(f"[{i+1}/{len(jobs)}] APPLYING TO: {row['job_title'][:40]} @ {row['company'][:20]}")
             
-            # 👇 --- AUTO-RESURRECT SAFETY CHECK --- 👇
             try:
-                # Check if just the tab was closed
                 if page.is_closed():
                     print("   ⚠️ Browser tab was closed! Reopening a new tab...")
                     page = context.new_page()
             except Exception:
-                # If the entire browser was closed, Playwright throws an error when checking the page.
                 print("   ⚠️ Browser was completely closed! Restarting the browser engine...")
                 browser = p.chromium.launch(headless=False)
                 context = browser.new_context()
                 page = context.new_page()
-            # 👆 ----------------------------------- 👆
-
-            # 👇 --- SMART LOADING & SOFT TIMEOUT --- 👇
+            
             try:
                 print("   ⏳ Loading application page...")
-                # wait_until="domcontentloaded" skips waiting for heavy images/trackers to finish
                 page.goto(row['apply_link'], timeout=15000, wait_until="domcontentloaded")
             except Exception as e:
-                # If it times out, the browser is likely still loading it in the background.
                 if "Timeout" in str(e):
                     print("   🐢 This portal is loading slowly. Letting it finish in the background...")
                 else:
-                    # If it's a real error (like a completely broken URL), skip to the next job
                     print(f"   ❌ Error loading page: {e}")
                     print("   ➡️ Skipping to the next job...\n")
                     continue
-            # 👆 ------------------------------------ 👆
 
-            print("   ⌨️  Attempting to inject profile data...")
-            
-            # ----------------------------------------------------------------
-            # 🤖 YOUR AUTO-FILL LOGIC GOES HERE
-            # Example:
-            # try:
-            #     page.fill('input[name="firstName"]', "YourName", timeout=3000)
-            # except Exception:
-            #     pass # Silently skip if the field doesn't exist on this specific site
-            # ----------------------------------------------------------------
-            
+            print("   ⌨️  Attempting to inject profile data...")                            
             print("   👤 [HUMAN REQUIRED] Please review the form, answer custom questions, and hit Submit.")
             input("   ➡️  Press [ENTER] in this terminal when you are ready for the NEXT job... ")
             
             print("") 
 
-        # Clean up at the end
         try:
             browser.close()
         except Exception:
-            pass # Failsafe in case they already closed it
+            pass 
 
         print("━"*60)
         print(" 🏁 ALL DONE! You've reached the end of your list.")
         print("━"*60)
 
-# ==========================================
-# 🎮 MAIN MENU EXECUTION
-# ==========================================
 
 if __name__ == "__main__":
     print("\n" + "━"*60)
     print(" 🤖 AI Job Agent — Your Personal Recruiter")
     print("━"*60)
     
-    # 📍 Session Context
     print(" 📍 Location: United States")
     print(f" 🎯 Target roles: {len(JOB_TITLES)} titles (e.g., {JOB_TITLES[0]}, {JOB_TITLES[1]})")
     print(f" 🧠 Experience: {PREFS['my_exp']} years | Visa Sponsorship: {'Required' if PREFS['needs_sponsorship'] else 'Not Required'}")
@@ -470,9 +412,7 @@ if __name__ == "__main__":
         
     matches = []
     
-    # --- PHASE 1 & 2: DISCOVER ---
     if choice in ['discover', 'all']:
-        # 🔍 Expectation Setting
         print("\n🔍 I'll now:")
         print(" • Search across multiple job platforms")
         print(" • Filter out senior / non-US / no-sponsorship roles")
@@ -481,7 +421,6 @@ if __name__ == "__main__":
         
         matches = run_scraper_agent() 
         
-        # 📊 Top Matches Summary (With "Why")
         if matches:
             print("\n" + "━"*60)
             print(" 🏆 Top Matches for You:")
@@ -495,7 +434,6 @@ if __name__ == "__main__":
                 print(f"\n    ... and {len(matches) - 5} more strong matches saved to CSV.")
             print("━"*60)
             
-            # Interactive Next Steps
             if choice == 'discover':
                 print("\nWhat would you like to do next?")
                 print(" 👉 [apply]     Start applying to these matches")
@@ -512,13 +450,10 @@ if __name__ == "__main__":
                     print("\nOkay, they are safely saved in your CSV. Catch you next time! 👋\n")
                     choice = 'exit'
 
-    # --- PHASE 3: APPLY ---
     if choice in ['apply', 'all']:
         print("\n" + "━"*60)
         print(" 🚀 READY TO APPLY")
         print("━"*60)
-        
-        # ⚠️ Safer Apply Phase Onboarding
         print("⚠️ Heads up: Each job will open in a new browser window.\n")
         print(" I will auto-fill:")
         print("  • Name, Email, Phone")
@@ -530,9 +465,7 @@ if __name__ == "__main__":
         
         proceed = input("Continue? (yes/no): ").strip().lower()
         if proceed in ['y', 'yes']:
-            human_in_the_loop_apply() 
-            
-            # 🏁 Closing Experience & Habit Hook
+            human_in_the_loop_apply()             
             print("\n" + "━"*60)
             print(" 🏁 Session Complete!")
             print("━"*60)
