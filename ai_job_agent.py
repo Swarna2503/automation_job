@@ -39,7 +39,9 @@ PREFS = {
 
     "blocked_companies": [
         # Add company names here to skip them (e.g. "Dice", "Jobot")
-        "jobot", "dice", "hirequest", "indeed.com"
+        "jobot", "dice", "hirequest", "indeed.com", "echojobs.com", "upwork.com", "recruit.net", "adzuna.com", "grabjobs.co",
+        "simplyhired.com", "getgreatcareers.com", "jobs.valleycentral.com", "jobs.stevenagefc.com", "jobs.ksnt.com", "us.trabajo.org/",
+        "jobs.stevenagefc.com", 
     ],
 }
 
