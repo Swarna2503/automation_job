@@ -43,16 +43,16 @@ PREFS = {
 }
 
 MY_PROFILE = {
-    "first_name": "Lakshmi Swarna Durga",
-    "last_name": "Nallam",
-    "email": "swarnadurga.nallam@gmail.com",
-    "phone": "7133596070",
-    "linkedin": "https://www.linkedin.com/in/swarna-nallam/",
-    "github": "https://github.com/Swarna2503",
-    "portfolio": "https://swarna2503.github.io/swarna-portfolio/",
-    "address": "1 Hermann Museum Circle Dr, 77004, Houston, TX",
+    "first_name": "First Name",
+    "last_name": "Last Name",
+    "email": "Email",
+    "phone": "Phone Number",
+    "linkedin": "https://www.linkedin.com/in/",
+    "github": "https://github.com/",
+    "portfolio": "https://swarna2503.github.io/",
+    "address": "Address",
     "country": "United States",                
-    "resume_path": os.path.expanduser("SwarnaNallam.pdf") 
+    "resume_path": os.path.expanduser("Resume.pdf") 
 }
 
 JOB_TITLES = [
