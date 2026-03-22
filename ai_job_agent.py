@@ -247,65 +247,78 @@ def get_apply_link(job: dict) -> str:
 # ==========================================
 
 def ai_score_job(full_text: str, pre_matched: list[str], job_title: str) -> dict:
-    """AI scoring — only called when regex finds ≥ 2 skill matches."""
+    """
+    AI scoring with strict Phase 1 Knockout for Experience > 2 years.
+    """
     bonus = visa_bonus(full_text)
 
+    # We define the candidate's ceiling as 2 years. 
+    # The prompt forces a 0 score if the job asks for 3, 4, 5+ etc.
     prompt = f"""
-You are a technical recruiter evaluating a US job posting for a candidate with
-EXACTLY 2 YEARS of experience who needs visa sponsorship (H1B/OPT).
+You are an expert technical recruiter evaluating a US job posting for a candidate with 
+EXACTLY 2 YEARS of experience who needs visa sponsorship.
 
-Job title being evaluated: "{job_title}"
+JOB TITLE: "{job_title}"
+CANDIDATE MAX EXPERIENCE: 2 Years
+CANDIDATE SKILLS: {', '.join(PREFS["my_skills"])}
 
-Candidate's full skill set:
-{', '.join(PREFS["my_skills"])}
+STEP 1: MANDATORY KNOCKOUT CHECK (Phase 1)
+If any of the following are true, the score MUST be 0 and you must STOP:
+1. EXPERIENCE: Does the job explicitly require a MINIMUM of more than 2 years? 
+   - Examples of FAIL (Score 0): "3+ years", "Minimum 4 years", "5-7 years", "Senior level".
+   - Examples of PASS: "1-2 years", "2+ years", "Entry level", "0-3 years".
+2. LOCATION: Is the job explicitly outside the United States? (Check for non-US cities or currencies like GBP/INR).
+3. CITIZENSHIP: Does it require "US Citizenship Only" or "Active Security Clearance"?
 
-Skills ALREADY CONFIRMED present by regex scan: {pre_matched} ({len(pre_matched)} confirmed)
+STEP 2: SCORING (Only if Step 1 passes)
+If the job is a PASS for a 2-year candidate, calculate a match score (1-100):
+- Base Score: {len(pre_matched)} skills already confirmed by regex.
+- Scoring Table (Total matches): 2 skills=50, 3 skills=68, 4 skills=80, 5 skills=88, 6+ skills=95+.
+- Add +5 bonus if the role mentions "Junior", "Associate", "Entry Level", or "New Grad".
+- Add +{bonus} visa-friendly bonus points (already detected).
 
-YOUR TASK: Score this job 0-100 purely on skill fit.
-
-SCORING TABLE (by total confirmed skill count):
-  1 skill  → 25     2 skills → 50     3 skills → 68
-  4 skills → 80     5 skills → 88     6 skills → 93
-  7+ skills → 96-100
-
-BONUSES (add to base score):
-  +5  if role says "entry-level", "junior", "0-2 years", or "new grad"
-  +{bonus} visa-friendly signals already detected (add directly)
-
-RULES:
-  - Verify the {len(pre_matched)} regex-confirmed skills, then find any extras
-  - Do NOT penalise for missing skills
-  - Do NOT apply any sponsorship penalty (already filtered upstream)
-
-Return ONLY valid JSON (no markdown, no extra text):
+Return ONLY valid JSON (no markdown):
 {{
-    "score"      : <int 0-100>,
-    "matches"    : ["every", "matched", "skill"],
-    "skill_count": <int>,
-    "reason"     : "<2 sentences: why this fits a 2yr candidate>",
-    "visa_status": "<Friendly | Not Mentioned | Unfriendly>"
+    "score": <int 0-100>,
+    "years_required": <int or null>,
+    "matches": ["list", "of", "skills", "found"],
+    "visa_status": "<Friendly | Not Mentioned | Unfriendly>",
+    "reason": "<1 sentence explaining if it passed the 2-year limit and why it got this score>"
 }}
 
-JOB TEXT:
+JOB TEXT (Truncated):
 {full_text[:5000]}
 """
+
     try:
         resp = client.models.generate_content(
-            model    = MODEL_ID,
-            contents = prompt,
-            config   = types.GenerateContentConfig(
+            model=MODEL_ID,
+            contents=prompt,
+            config=types.GenerateContentConfig(
                 response_mime_type="application/json",
-                temperature=0.1,
+                temperature=0.1,  # Low temperature for strict adherence to rules
             ),
         )
+        
+        # Clean potential markdown from response
         raw = re.sub(r"```json|```", "", resp.text.strip()).strip()
-        return json.loads(raw)
+        result = json.loads(raw)
+        
+        # Final safety check: if AI says years > 2 but didn't 0 the score, we override it here.
+        if result.get("years_required") and int(result["years_required"]) > 2:
+            result["score"] = 0
+            result["reason"] = f"Manual Override: Requires {result['years_required']} years. {result['reason']}"
+            
+        return result
+
     except Exception as e:
+        # Fallback if AI crashes
         return {
-            "score"      : max(25, len(pre_matched) * 14),
-            "matches"    : pre_matched,
+            "score": 0,
+            "years_required": None,
+            "matches": pre_matched,
             "skill_count": len(pre_matched),
-            "reason"     : f"AI error — regex fallback. {e}",
+            "reason": f"AI Evaluation Error: {e}",
             "visa_status": "Unknown",
         }
 
@@ -384,108 +397,82 @@ def find_jobs_blitz() -> list[dict]:
 # ==========================================
 
 def run_agent():
-    # ── STEP 1: Fetch structured jobs ─────────────────────
+    # STEP 1: Fetch structured jobs
     raw_jobs = find_jobs_blitz()
     if not raw_jobs:
-        print("❌ No jobs found. Check SERPAPI_KEY in .env")
+        print("❌ No jobs found.")
         return
 
-    print(f"🧠 FILTERING & SCORING {len(raw_jobs)} jobs...\n")
+    all_results = [] # To store every job for the CSV
+    scored_only = [] # To assist in ranking the top 25
 
-    all_scored      = []
-    hard_rejected   = 0
-    low_skill_skip  = 0
-    rejection_log   = {}
+    print(f"🧠 PROCESSING {len(raw_jobs)} jobs...\n")
 
     for i, job in enumerate(raw_jobs):
         title   = job.get("title", "Unknown")
         company = job.get("company_name", "Unknown")
-        loc     = job.get("location", "Unknown")
-        print(f"[{i+1:>3}/{len(raw_jobs)}] {title:<40} @ {company:<25} | {loc}")
+        
+        # Metadata for CSV
+        row = {
+            "job_title": title,
+            "company": company,
+            "location": job.get("location", "Unknown"),
+            "apply_link": get_apply_link(job),
+            "posted": (job.get("detected_extensions", {}) or {}).get("posted_at", "Today"),
+            "visa_status": "Not Evaluated",
+            "score": 0,
+            "rejection_reason": ""
+        }
 
-        # ── STEP 2: Hard filter (free) ─────────────────────
+        # STEP 2: Hard filter
         rejected, reason = hard_filter(job)
         if rejected:
-            hard_rejected += 1
-            category = reason.split(":")[0]
-            rejection_log[category] = rejection_log.get(category, 0) + 1
-            print(f"         🚫 {reason}")
+            row["rejection_reason"] = f"REJECTED: {reason}"
+            all_results.append(row)
             continue
 
-        # ── STEP 3: Regex skill count (free) ──────────────
-        full_text           = get_full_text(job)
+        # STEP 3: Regex skill count
+        full_text = get_full_text(job)
         skill_n, skill_list = regex_skill_count(full_text)
 
         if skill_n < 2:
-            low_skill_skip += 1
-            print(f"         ⬇️  Only {skill_n} skill match — skipped")
+            row["rejection_reason"] = f"SKIPPED: Low skill match ({skill_n})"
+            all_results.append(row)
             continue
 
-        print(f"         ✅ {skill_n} skills: {skill_list}")
+        # STEP 4: AI Scoring
+        ai_data = ai_score_job(full_text, skill_list, title)
+        
+        # Merge AI data into our row
+        row.update({
+            "score": ai_data.get("score", 0),
+            "visa_status": ai_data.get("visa_status", "Unknown"),
+            "rejection_reason": "PASSED",
+            "matches": ", ".join(ai_data.get("matches", []))
+        })
+        
+        all_results.append(row)
+        scored_only.append(row)
 
-        # ── STEP 4: AI detailed score ──────────────────────
-        result = ai_score_job(full_text, skill_list, title)
+    # STEP 5: Sort by Score (Ranked Order)
+    all_results.sort(key=lambda x: x["score"], reverse=True)
 
-        # ── Attach metadata ────────────────────────────────
-        result["job_title"]  = title
-        result["company"]    = company
-        result["location"]   = loc
-        result["visa_bonus"] = visa_bonus(full_text)
-        result["apply_link"] = get_apply_link(job)
-        result["posted"]     = (job.get("detected_extensions", {}) or {}).get("posted_at", "Today")
-        all_scored.append(result)
-
-    # ── STEP 5: Rank by score ──────────────────────────────
-    all_scored.sort(key=lambda x: x["score"], reverse=True)
-
-    # ── STEP 6: Save to CSV ────────────────────────────────
-    output_file = "usa_jobs_ranked.csv"
-    fieldnames  = [
-        "score", "skill_count", "job_title", "company", "location",
-        "matches", "visa_status", "visa_bonus", "posted", "reason", "apply_link"
-    ]
+    # STEP 6: Save to CSV
+    output_file = "usa_jobs_ranked_full.csv"
+    fieldnames = ["score", "job_title", "company", "location", "visa_status", "posted", "apply_link", "rejection_reason"]
+    
     with open(output_file, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         writer.writeheader()
-        writer.writerows(all_scored)
+        writer.writerows(all_results)
 
-    # ── STEP 7: Summary ────────────────────────────────────
-    print(f"\n{'='*70}")
-    print(f"🎯 OPERATION COMPLETE")
-    print(f"{'='*70}")
-    print(f"  📡 Raw jobs from Google Jobs API   : {len(raw_jobs)}")
-    print(f"  🚫 Hard rejected                   : {hard_rejected}")
-    if rejection_log:
-        for cat, cnt in sorted(rejection_log.items(), key=lambda x: -x[1]):
-            print(f"       └─ {cat:<35}: {cnt}")
-    print(f"  ⬇️  Skipped (< 2 skill match)      : {low_skill_skip}")
-    print(f"  🧠 AI-scored & saved               : {len(all_scored)}")
-    print(f"  💾 Output                          : {output_file}")
-    print(f"{'='*70}")
-
-    if all_scored:
-        top = all_scored[:10]
-        print(f"\n🏆 TOP {len(top)} MATCHES:\n")
-        for rank, job in enumerate(top, 1):
-            visa_icon = {"Friendly": "🟢", "Not Mentioned": "🟡",
-                         "Unfriendly": "🔴"}.get(job.get("visa_status", ""), "⚪")
-            print(
-                f"  #{rank:>2}  [{job['score']:>3}/100] {visa_icon}  "
-                f"{job['job_title']:<38} @ {job['company']:<22}"
-            )
-            print(f"        Skills:{job.get('skill_count',0)}  "
-                  f"Location:{job['location']:<25}  Posted:{job.get('posted','?')}")
-            print(f"        Apply: {job['apply_link'][:72]}")
-            print()
-
-    print(f"💡 TIPS:")
-    print(f"   • Sort 'score' column descending → best matches first")
-    print(f"   • Filter visa_status = Friendly  → safest to apply")
-    print(f"   • 'apply_link' column has the direct application URL")
-    if len(all_scored) < 20:
-        print(f"\n⚠️  Got {len(all_scored)} scored jobs (target: 20+).")
-        print(f"   → Add more titles to JOB_TITLES list in the config")
-        print(f"   → Or run at different times of day (new jobs post throughout the day)")
+    print(f"\n✅ Saved {len(all_results)} total entries to {output_file}")
+    
+    # Display Top 25
+    top_25 = [j for j in all_results if j["rejection_reason"] == "PASSED"][:25]
+    print(f"\n🏆 TOP {len(top_25)} QUALIFIED MATCHES:")
+    for rank, job in enumerate(top_25, 1):
+        print(f"  #{rank:>2} [{job['score']:>3}/100] {job['job_title']} @ {job['company']}")
 
 
 if __name__ == "__main__":
