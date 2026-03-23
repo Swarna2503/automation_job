@@ -1,4 +1,4 @@
-# AI Job Agent — Your Personal Recruiter in the Terminal
+# AutoApply AI — An AI Agent, Your Personal Recruiter in the Terminal
 An intelligent CLI-based agent that finds, filters, scores, and helps you apply to jobs tailored to your profile saving hours of manual job searching.
 
 ## The Problem
@@ -19,17 +19,6 @@ This project builds a **personal AI recruiter** that:
 - Assists with applications using browser automation
 
 All from a simple terminal interface.
-
-## Features
-
-- AI-powered job scoring using Gemini
-- Experience-aware filtering (strict 2-year cap logic)
-- Automatic removal of non-US roles
-- Visa-aware filtering and scoring
-- Fast job discovery with API budget optimization
-- Human-in-the-loop auto application (Playwright)
-- Ranked job output (CSV)
-- Interactive CLI experience (guided workflow)
 
 ## Setup
 
