@@ -47,5 +47,6 @@ Create a `.env` file: An example .env is given in the repository
 python3 ai_job_agent.py
 
 ## Architecture
+<img width="355" height="282" alt="Screenshot 2026-03-22 at 8 04 26 PM" src="https://github.com/user-attachments/assets/47c59907-baba-4c78-88b7-5c63d28a59fb" />
 
-<img width="803" height="628" alt="Screenshot 2026-03-22 at 6 17 55 PM" src="https://github.com/user-attachments/assets/be23f5f0-01c2-408c-b394-b4c284d1c5e3" />
+
