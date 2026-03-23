@@ -5,4 +5,4 @@ __pycache__/
 *.pyc
 .pytest_cache/
 *.log
-usa_jobs_ranked_full.csv  # Don't commit job data
+usa_jobs_ranked_full.csv  
