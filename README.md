@@ -1,5 +1,5 @@
 # AI Job Agent — Your Personal Recruiter in the Terminal
-An intelligent CLI-based agent that finds, filters, scores, and helps you apply to jobs tailored to your profile — saving hours of manual job searching.
+An intelligent CLI-based agent that finds, filters, scores, and helps you apply to jobs tailored to your profile saving hours of manual job searching.
 
 ## The Problem
 
