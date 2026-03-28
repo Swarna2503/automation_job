@@ -23,7 +23,7 @@ All from a simple terminal interface.
 ## Setup
 
 ### 1. Clone the repo
-git clone https://github.com/your-username/ai-job-agent.git
+git clone https://github.com/Swarna2503/automation_job.git
 cd ai-job-agent
 
 ### 2. Install dependencies
