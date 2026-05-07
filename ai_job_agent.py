@@ -16,15 +16,15 @@ MODEL_ID    = "gemini-2.5-flash"
 MAX_SERPAPI_CALLS = 5  
 
 PREFS = {
-    "my_exp"           : 2,
+    "my_exp"           : 5,
     "needs_sponsorship": True,
     "my_skills": [
-        "Python", "SQL", "R", "Java", "C++", "LLMs", "RAG", "NLP", "Clustering", "Segmentation",
-        "Recommendation Systems", "Feature Engineering", "Machine Learning", "Deep Learning",
-        "Scikit-Learn", "PyTorch", "TensorFlow", "BERT", "XGBoost", "LightGBM", "CatBoost", 
-        "Autoencoders", "Hive", "AWS", "Databricks", "Spark", "PySpark", "Hadoop", "MongoDB", 
-        "Git", "Tableau", "Power BI", "Matplotlib", "JavaScript", "TypeScript", "HTML", "CSS"
-    ],
+         "Python", "SQL", "R", "Java", "C++", "LLMs", "RAG", "NLP", "Clustering", "Segmentation",
+         "Recommendation Systems", "Feature Engineering", "Machine Learning", "Deep Learning",
+         "Scikit-Learn", "PyTorch", "TensorFlow", "BERT", "XGBoost", "LightGBM", "CatBoost", 
+         "Autoencoders", "Hive", "AWS", "Databricks", "Spark", "PySpark", "Hadoop", "MongoDB", 
+         "Git", "Tableau", "Power BI", "Matplotlib", "JavaScript", "TypeScript", "HTML", "CSS"
+     ],
     "blocked_companies": [
         "jobot", "dice", "hirequest", "indeed.com", "echojobs.com", "upwork.com", "recruit.net", 
         "adzuna.com", "grabjobs.co", "simplyhired.com", "getgreatcareers.com", "jobs.valleycentral.com", 
@@ -166,7 +166,7 @@ def find_jobs_blitz():
         api_calls_made += 1
         
         for job in jobs:
-            job_id = job.get("job_id", job.get("title", "") + job.get("company_name", ""))
+            job_id = job.get("job_id") or (job.get("title", "") + job.get("company_name", ""))
             if job_id not in seen_ids:
                 seen_ids.add(job_id)
                 all_jobs.append(job)
@@ -182,82 +182,124 @@ def visa_bonus(text: str) -> int:
     hits = sum(1 for p in SPONSORSHIP_FRIENDLY_SIGNALS if re.search(p, t))
     return min(hits * 5, 15)
 
-def ai_score_job(full_text: str, pre_matched: list[str], job_title: str) -> dict:
+def agent_1_analyst(full_text: str, pre_matched: list[str], job_title: str) -> dict:
+    """
+    AGENT 1: The Analyst. 
+    Does the initial evaluation and scoring of the job description.
+    """
     bonus = visa_bonus(full_text)
     
     prompt = f"""
-You are an expert technical recruiter evaluating a US job posting for a candidate with 
-EXACTLY {PREFS["my_exp"]} YEARS of experience who needs visa sponsorship.
+    You are an AI Job Analyst. Evaluate this job for a candidate with {PREFS["my_exp"]} years of experience.
+    Confirmed skills: {', '.join(pre_matched)}
+    Needs Visa Sponsorship: {PREFS["needs_sponsorship"]}
+    
+    JOB TITLE: {job_title}
+    
+    STEP 1: KNOCKOUT CHECK
+    If the job requires strictly >{PREFS["my_exp"]} years of experience, requires US Citizenship/Clearance, or explicitly denies visa sponsorship, mark `is_knockout` as true.
+    
+    STEP 2: SCORING
+    If not a knockout, propose a score (1-100) based on:
+    - Base Score: {len(pre_matched)} skills already confirmed by regex.
+    - Scoring Table: 2 skills=50, 3 skills=68, 4 skills=80, 5 skills=88, 6+ skills=95+.
+    - Add +5 bonus if the role mentions "Junior", "Associate", "Entry Level", or "New Grad".
+    - Add +{bonus} visa-friendly bonus points (already detected).
+    - Cap the maximum final score at 100.
+    
+    JOB DESCRIPTION:
+    {full_text[:4000]}
+    """
 
-JOB TITLE: "{job_title}"
-CANDIDATE MAX EXPERIENCE: {PREFS["my_exp"]} Years
-CANDIDATE SKILLS: {', '.join(PREFS["my_skills"])}
-
-STEP 1: MANDATORY KNOCKOUT CHECK (Phase 1)
-If any of the following are true, the score MUST be 0 and you must STOP:
-1. EXPERIENCE: Does the job explicitly require a MINIMUM of more than {PREFS["my_exp"]} years? 
-   - Examples of FAIL (Score 0): "3+ years", "Minimum 4 years", "5-7 years", "Senior level".
-   - Examples of PASS: "1-2 years", "2+ years", "Entry level", "0-3 years".
-2. LOCATION: Is the job explicitly outside the United States? (Check for non-US cities or currencies like GBP/INR).
-3. CITIZENSHIP: Does it require "US Citizenship Only" or "Active Security Clearance"?
-
-STEP 2: SCORING (Only if Step 1 passes)
-If the job is a PASS for a {PREFS["my_exp"]}-year candidate, calculate a match score (1-100):
-- Base Score: {len(pre_matched)} skills already confirmed by regex.
-- Scoring Table (Total matches): 2 skills=50, 3 skills=68, 4 skills=80, 5 skills=88, 6+ skills=95+.
-- Add +5 bonus if the role mentions "Junior", "Associate", "Entry Level", or "New Grad".
-- Add +{bonus} visa-friendly bonus points (already detected).
-- Cap the maximum final score at 100.
-
-Return ONLY valid JSON (no markdown):
-{{
-    "score": <int 0-100>,
-    "years_required": <int or null>,
-    "matches": {json.dumps(pre_matched)},
-    "visa_status": "<Friendly | Not Mentioned | Unfriendly>",
-    "reason": "<1 sentence explaining if it passed the {PREFS["my_exp"]}-year limit and why it got this score>"
-}}
-
-JOB TEXT (Truncated):
-{full_text[:5000]}
-"""
+    schema = {
+        "type": "OBJECT",
+        "properties": {
+            "analyst_reasoning": {"type": "STRING", "description": "Step-by-step logic."},
+            "is_knockout": {"type": "BOOLEAN"},
+            "proposed_score": {"type": "INTEGER"},
+            "years_required": {"type": "INTEGER", "nullable": True}
+        },
+        "required": ["analyst_reasoning", "is_knockout", "proposed_score"]
+    }
 
     try:
         resp = client.models.generate_content(
             model=MODEL_ID, 
             contents=prompt,
             config=types.GenerateContentConfig(
-                response_mime_type="application/json", 
-                temperature=0.1
+                response_mime_type="application/json",
+                response_schema=schema,
+                temperature=0.2
             )
         )
         
-        raw = re.sub(r"```json|```", "", resp.text.strip()).strip()
-        result = json.loads(raw)
-        
-        # --- BULLETPROOF Safety Override ---
-        years_req = result.get("years_required")
-        if years_req is not None:
-            try:
-                # Extract digits just in case LLM says "3 years" instead of 3
-                years_int = int(re.search(r'\d+', str(years_req)).group())
-                if years_int > PREFS["my_exp"]:
-                    result["score"] = 0
-                    result["reason"] = f"Manual Override: Requires {years_int} years. " + result.get("reason", "")
-            except:
-                pass # If regex fails to find a number, ignore and trust the AI
-                
-        return result
-        
+        raw_text = resp.text.strip()
+        if raw_text.startswith("```json"):
+            raw_text = raw_text[7:-3].strip()
+        elif raw_text.startswith("```"):
+            raw_text = raw_text[3:-3].strip()
+            
+        return json.loads(raw_text)
     except Exception as e:
-        return {
-            "score": 0, 
-            "years_required": None, 
-            "matches": pre_matched,
-            "visa_status": "Unknown", 
-            "reason": f"AI Parsing Error: {e}"
-        }
+        print(f"      ⚠️ API Error for {job_title}: {e}")
+        return {"is_knockout": True, "proposed_score": 0, "analyst_reasoning": f"Agent Error: {e}"}
 
+def agent_2_supervisor(full_text: str, agent_1_output: dict, job_title: str) -> dict:
+    """
+    AGENT 2: The Judge.
+    Audits Agent 1's work to catch hallucinations, missed red flags, or bad math.
+    """
+    prompt = f"""
+    You are the Supervisor QA Agent. You are auditing "Agent 1", who just evaluated a job posting.
+    
+    CANDIDATE CONSTRAINTS: Max {PREFS["my_exp"]} years experience, needs Visa Sponsorship.
+    JOB TITLE: {job_title}
+    
+    AGENT 1'S WORK TO AUDIT:
+    {json.dumps(agent_1_output, indent=2)}
+    
+    YOUR JOB:
+    1. Read the job description carefully.
+    2. Did Agent 1 miss a major red flag? (e.g., The job requires US Citizenship, or >{PREFS["my_exp"]} years exp, but Agent 1 missed it).
+    3. If Agent 1 marked `is_knockout` as true, the `final_approved_score` MUST be 0.
+    4. Override Agent 1 if they made a mistake, or approve their score if they are correct.
+    
+    JOB DESCRIPTION:
+    {full_text[:4000]}
+    """
+
+    schema = {
+        "type": "OBJECT",
+        "properties": {
+            "supervisor_audit_notes": {"type": "STRING", "description": "Critique of Agent 1's work."},
+            "agent_1_was_correct": {"type": "BOOLEAN"},
+            "final_approved_score": {"type": "INTEGER", "description": "Must be 0 if job is a knockout."},
+            "final_verdict_reason": {"type": "STRING", "description": "One sentence explaining the final decision for the user."}
+        },
+        "required": ["supervisor_audit_notes", "agent_1_was_correct", "final_approved_score", "final_verdict_reason"]
+    }
+
+    try:
+        resp = client.models.generate_content(
+            model=MODEL_ID, 
+            contents=prompt,
+            config=types.GenerateContentConfig(
+                response_mime_type="application/json",
+                response_schema=schema,
+                temperature=0.0
+            )
+        )
+        
+        raw_text = resp.text.strip()
+        if raw_text.startswith("```json"):
+            raw_text = raw_text[7:-3].strip()
+        elif raw_text.startswith("```"):
+            raw_text = raw_text[3:-3].strip()
+            
+        return json.loads(raw_text)
+    except Exception as e:
+        print(f"      ⚠️ API Error for {job_title}: {e}")
+        return {"is_knockout": True, "proposed_score": 0, "analyst_reasoning": f"Agent Error: {e}"}
 def run_scraper_agent():
     raw_jobs = find_jobs_blitz()
     if not raw_jobs: 
@@ -273,34 +315,66 @@ def run_scraper_agent():
     for job in raw_jobs:
         title = job.get("title", "Unknown")
         company = job.get("company_name", "Unknown")
+        
+        # --- Catch & Save Hard Filter Rejections ---
         rejected, reason = hard_filter(job)
         if rejected:
             print(f" ❌ Skipped: {company[:15]:<15} | {title[:20]:<20} -> Reason: {reason}")
+            all_results.append({
+                "score": 0,
+                "job_title": title,
+                "company": company,
+                "apply_link": get_apply_link(job),
+                "reason": f"Hard Filter: {reason}"
+            })
             continue
         
         full_text = get_full_text(job)
         skill_n, skill_list = regex_skill_count(full_text)
+        
+        # --- Catch & Save Low Skill Rejections ---
         if skill_n < 3:
             print(f" ⚠️  Skipped: {company[:15]:<15} | {title[:20]:<20} -> Reason: Only {skill_n} relevant skills")
-            continue 
-        
-        ai_data = ai_score_job(full_text, skill_list, title)
-        score = ai_data.get("score", 0)
-        
-        if score >= 70:
-            print(f" ✅ MATCH!  : {company[:15]:<15} | {title[:20]:<20} -> Score: {score}/100")
             all_results.append({
-                "score": score,
+                "score": 0,
                 "job_title": title,
                 "company": company,
                 "apply_link": get_apply_link(job),
-                "reason": ai_data.get("reason", "")
+                "reason": f"Low Skills: Found only {skill_n} relevant skills"
             })
+            continue 
+        
+        # 1. Analyst evaluates the job and generates the first draft
+        agent_1_data = agent_1_analyst(full_text, skill_list, title)
+        time.sleep(1) 
+        
+        # 2. Supervisor audits the draft and issues the final verdict
+        agent_2_data = agent_2_supervisor(full_text, agent_1_data, title)
+        time.sleep(1) 
+        
+        score = agent_2_data.get("final_approved_score", 0)
+        final_reason = agent_2_data.get("final_verdict_reason", "No reason provided.")
+        
+        if not agent_2_data.get("agent_1_was_correct", True):
+            print(f" 🚨 Overruled: {company[:15]:<15} | Supervisor caught an error! Score adjusted to {score}.")
+        
+        # --- Save ALL AI evaluations (Pass or Fail) ---
+        all_results.append({
+            "score": score,
+            "job_title": title,
+            "company": company,
+            "apply_link": get_apply_link(job),
+            "reason": final_reason
+        })
+        
+        if score >= 70:
+            print(f" ✅ MATCH!  : {company[:15]:<15} | {title[:20]:<20} -> Score: {score}/100")
             for s in skill_list:
                 skills_counter[s] = skills_counter.get(s, 0) + 1
         else:
             print(f" 📉 Skipped: {company[:15]:<15} | {title[:20]:<20} -> Reason: Low AI match score ({score})")
 
+    # Sort everything: highest scores at the top, 0 scores at the bottom
     all_results.sort(key=lambda x: x["score"], reverse=True)
     
     with open("usa_jobs_ranked_full.csv", "w", newline="", encoding="utf-8") as f:
@@ -309,43 +383,54 @@ def run_scraper_agent():
         writer.writerows(all_results)
     
     print("━"*60)
-    print(f"✅ Saved {len(all_results)} highly qualified leads.")
+    print(f"✅ Saved {len(all_results)} total processed jobs to CSV.")
     
-    if all_results and skills_counter:
+    if skills_counter:
         top_skills = sorted(skills_counter.items(), key=lambda x: x[1], reverse=True)[:3]
         skill_names = [s[0] for s in top_skills]
         print(f"🧠 Insight: Most matching roles today require {', '.join(skill_names)}.")
         
-    return all_results
-
+    # Return only the passing matches so the summary in the terminal looks clean
+    return [job for job in all_results if job["score"] >= 70]
 
 def human_in_the_loop_apply():
     jobs = []
     try:
         with open("usa_jobs_ranked_full.csv", "r", encoding="utf-8") as f:
             reader = csv.DictReader(f)
-            jobs = list(reader)
+            # --- NEW CODE: Only grab jobs with a score of 70 or higher ---
+            jobs = [row for row in reader if int(row["score"]) >= 70]
+            
     except FileNotFoundError:
         print("\n ❌ Error: 'usa_jobs_ranked_full.csv' not found. Please run the [discover] phase first!\n")
         return
 
     if not jobs:
-        print("\n ❌ No jobs found in the CSV to apply to.\n")
+        print("\n ❌ No passing jobs found in the CSV to apply to.\n")
         return
 
     print("\n" + "━"*60)
-    print(" 🚀 BOOTING APPLICATION ASSISTANT (Human-in-the-Loop)")
+    print(f" 🚀 BOOTING APPLICATION ASSISTANT ({len(jobs)} matches to process)")
     print("━"*60 + "\n")
 
     with sync_playwright() as p:
-        # Launch the browser
-        print(" 🌐 Launching browser...")
-        browser = p.chromium.launch(headless=False)
-        context = browser.new_context()
-        page = context.new_page()
+        print(" 🌐 Launching persistent browser...")
+        
+        # --- NEW CODE: Use a persistent profile folder to save logins ---
+        user_data_dir = os.path.join(os.getcwd(), "chrome_profile_data")
+        
+        context = p.chromium.launch_persistent_context(
+            user_data_dir=user_data_dir,
+            headless=False,
+            # Playwright's persistent context sometimes opens a blank tab by default.
+            # We will use that existing tab instead of opening a new one.
+        )
+        
+        # Get the default page created by the persistent context
+        page = context.pages[0] if context.pages else context.new_page()
 
         for i, row in enumerate(jobs):
-            print(f"[{i+1}/{len(jobs)}] APPLYING TO: {row['job_title'][:40]} @ {row['company'][:20]}")
+            print(f"\n[{i+1}/{len(jobs)}] APPLYING TO: {row['job_title'][:40]} @ {row['company'][:20]}")
             
             try:
                 if page.is_closed():
@@ -353,13 +438,21 @@ def human_in_the_loop_apply():
                     page = context.new_page()
             except Exception:
                 print("   ⚠️ Browser was completely closed! Restarting the browser engine...")
-                browser = p.chromium.launch(headless=False)
-                context = browser.new_context()
-                page = context.new_page()
+                # Re-launch persistent context if they closed the whole window
+                context = p.chromium.launch_persistent_context(
+                    user_data_dir=user_data_dir,
+                    headless=False
+                )
+                page = context.pages[0] if context.pages else context.new_page()
             
             try:
                 print("   ⏳ Loading application page...")
                 page.goto(row['apply_link'], timeout=15000, wait_until="domcontentloaded")
+                
+                # --- TIP: Add a tiny pause here on the very first run ---
+                # If you need to log in to LinkedIn/Indeed, you can do it manually now.
+                # After you log in once, 'chrome_profile_data' saves it forever.
+
             except Exception as e:
                 if "Timeout" in str(e):
                     print("   🐢 This portal is loading slowly. Letting it finish in the background...")
@@ -369,17 +462,49 @@ def human_in_the_loop_apply():
                     continue
 
             print("   ⌨️  Attempting to inject profile data...")                            
+            
+            # Safe JSON serialization for JavaScript injection
+            safe_first = json.dumps(MY_PROFILE.get("first_name", ""))
+            safe_last = json.dumps(MY_PROFILE.get("last_name", ""))
+            safe_email = json.dumps(MY_PROFILE.get("email", ""))
+            safe_phone = json.dumps(MY_PROFILE.get("phone", ""))
+            safe_linkedin = json.dumps(MY_PROFILE.get("linkedin", ""))
+            safe_github = json.dumps(MY_PROFILE.get("github", ""))
+
+            js_injection = f"""
+            () => {{
+                const setVal = (selectors, value) => {{
+                    if(!value) return;
+                    document.querySelectorAll(selectors).forEach(el => {{
+                        el.value = value;
+                        el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    }});
+                }};
+                
+                setVal('input[name*="first" i], input[id*="first" i]', {safe_first});
+                setVal('input[name*="last" i], input[id*="last" i]', {safe_last});
+                setVal('input[type="email" i], input[name*="email" i]', {safe_email});
+                setVal('input[type="tel" i], input[name*="phone" i]', {safe_phone});
+                setVal('input[name*="linkedin" i], input[name*="url" i]', {safe_linkedin});
+                setVal('input[name*="github" i]', {safe_github});
+            }}
+            """
+            try:
+                page.evaluate(js_injection)
+                print("   ✅ Auto-fill script executed.")
+            except Exception as e:
+                pass 
+
             print("   👤 [HUMAN REQUIRED] Please review the form, answer custom questions, and hit Submit.")
             input("   ➡️  Press [ENTER] in this terminal when you are ready for the NEXT job... ")
             
-            print("") 
-
         try:
-            browser.close()
+            context.close()
         except Exception:
             pass 
 
-        print("━"*60)
+        print("\n" + "━"*60)
         print(" 🏁 ALL DONE! You've reached the end of your list.")
         print("━"*60)
 
