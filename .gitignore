@@ -6,3 +6,5 @@ __pycache__/
 .pytest_cache/
 *.log
 usa_jobs_ranked_full.csv  
+tagui
+chrome_profile_data

@@ -9,6 +9,10 @@ from google.genai import types
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 import sys
+import subprocess
+import socket
+import platform
+
 load_dotenv()
 SERPAPI_KEY = os.getenv("SERPAPI_KEY")
 client      = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
@@ -73,6 +77,31 @@ SENIORITY_TITLE_PATTERNS = [r'\bsenior\b', r'\bsr\b\.?', r'\bstaff\b', r'\bprinc
 CLEARANCE_PATTERNS = [r'\bts/sci\b', r'\btop secret\b', r'\bsecurity clearance\b', r'\bactive clearance\b', r'\bus citizen(ship)?\s+required\b']
 NO_SPONSORSHIP_PATTERNS = [r'\bno\s+(visa\s+)?sponsorship\b', r'\bwill not\s+sponsor\b', r'\bcannot\s+sponsor\b', r'\bno\s+h.?1.?b\b', r'\bno\s+opt\b', r'\bno\s+cpt\b']
 SPONSORSHIP_FRIENDLY_SIGNALS = [r'\be.?verify\b', r'\bopt\b', r'\bcpt\b', r'\bh.?1.?b\b', r'\bvisa sponsorship\s*(is\s*)?(available|provided|offered)\b', r'\buniversity\s+(hire|grad|graduate)\b']
+
+def find_free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(('', 0))
+        return s.getsockname()[1]
+def get_chrome_path():
+    """Return path to Chrome executable."""
+    system = platform.system()
+    if system == "Darwin":  # macOS
+        return "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+    elif system == "Windows":
+        return "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe"
+    else:  # Linux
+        return "google-chrome"
+
+def get_default_chrome_profile():
+    """Return path to your default Chrome profile."""
+    home = os.path.expanduser("~")
+    if platform.system() == "Darwin":
+        return os.path.join(home, "Library/Application Support/Google/Chrome/Default")
+    elif platform.system() == "Windows":
+        return os.path.join(home, "AppData\\Local\\Google\\Chrome\\User Data\\Default")
+    else:
+        return os.path.join(home, ".config/google-chrome/Default")
+
 
 def hard_filter(job: dict) -> tuple[bool, str]:
     title       = (job.get("title", "") or "").lower()
@@ -508,93 +537,133 @@ def human_in_the_loop_apply():
         print(" 🏁 ALL DONE! You've reached the end of your list.")
         print("━"*60)
 
+def manual_apply_with_real_chrome(jobs):
+    """
+    Uses Playwright's persistent context (saves login data in chrome_profile_data/).
+    You log in once on the first run, then it remembers.
+    No manual Chrome start required.
+    """
+    if not jobs:
+        print("❌ No jobs to apply to.")
+        return
 
-if __name__ == "__main__":
     print("\n" + "━"*60)
-    print(" 🤖 AI Job Agent — Your Personal Recruiter")
-    print("━"*60)
-    
-    print(" 📍 Location: United States")
-    print(f" 🎯 Target roles: {len(JOB_TITLES)} titles (e.g., {JOB_TITLES[0]}, {JOB_TITLES[1]})")
-    print(f" 🧠 Experience: {PREFS['my_exp']} years | Visa Sponsorship: {'Required' if PREFS['needs_sponsorship'] else 'Not Required'}")
-    print("━"*60)
+    print(f" 🚀 APPLYING TO {len(jobs)} JOBS (persistent browser profile)")
+    print("   Auto‑fill will attempt to fill fields as they appear.")
+    print("   You remain in full control to review and submit.")
+    print("━"*60 + "\n")
 
-    print("\nWhat would you like to do today?")
-    print(" 👉 [discover]  Search, filter, and score new jobs")
-    print(" 👉 [apply]     Start applying to saved matches")
-    print(" 👉 [all]       Run the full discovery and application pipeline")
-    print(" 👉 [exit]      Close the agent\n")
+    user_data_dir = os.path.join(os.getcwd(), "chrome_profile_data")
     
-    choice = input("Enter command: ").strip().lower()
-    
-    if choice not in ['discover', 'apply', 'all', 'exit']:
-        print("❌ Invalid command. Please restart and try again.")
-        sys.exit()
+    with sync_playwright() as p:
+        print(" 🌐 Launching persistent browser...")
+        context = p.chromium.launch_persistent_context(
+            user_data_dir=user_data_dir,
+            headless=False,
+            args=["--disable-blink-features=AutomationControlled"]
+        )
+        
+        # Get or create a page
+        page = context.pages[0] if context.pages else context.new_page()
+        page.set_default_timeout(20000)
 
-    if choice == 'exit':
-        print("\nSee you tomorrow! 👋\n")
-        sys.exit()
-        
-    matches = []
-    
-    if choice in ['discover', 'all']:
-        print("\n🔍 I'll now:")
-        print(" • Search across multiple job platforms")
-        print(" • Filter out senior / non-US / no-sponsorship roles")
-        print(" • Score jobs based on your exact profile")
-        print("\n⏳ This may take ~20–30 seconds...\n")
-        
-        matches = run_scraper_agent() 
-        
-        if matches:
-            print("\n" + "━"*60)
-            print(" 🏆 Top Matches for You:")
-            print("━"*60)
-            for i, job in enumerate(matches[:5]): 
-                reason_trunc = job['reason'][:65] + "..." if len(job['reason']) > 65 else job['reason']
-                print(f" {i+1}. {job['job_title'][:25]:<25} @ {job['company'][:15]:<15} | Score: {job['score']}")
-                print(f"    ↳ {reason_trunc}")
-            
-            if len(matches) > 5:
-                print(f"\n    ... and {len(matches) - 5} more strong matches saved to CSV.")
-            print("━"*60)
-            
-            if choice == 'discover':
-                print("\nWhat would you like to do next?")
-                print(" 👉 [apply]     Start applying to these matches")
-                print(" 👉 [view]      Inspect full job details (CSV)")
-                print(" 👉 [exit]      Finish session\n")
-                
-                next_action = input("Enter command: ").strip().lower()
-                if next_action == 'apply':
-                    choice = 'apply'
-                elif next_action == 'view':
-                    print("\n📄 Open 'usa_jobs_ranked_full.csv' in your code editor or Excel to view all links and details.")
-                    choice = 'exit'
+        for i, row in enumerate(jobs):
+            print(f"\n[{i+1}/{len(jobs)}] APPLYING TO: {row['job_title'][:40]} @ {row['company'][:20]}")
+            link = row.get('apply_link', '')
+            if not link:
+                print("   ⚠️ No apply link – skipping")
+                continue
+
+            print("   ⏳ Loading application page...")
+            try:
+                response = page.goto(link, wait_until="domcontentloaded", timeout=15000)
+                if response and response.status >= 400:
+                    print(f"   ❌ HTTP error {response.status} – skipping job.")
+                    continue
+            except Exception as e:
+                print(f"   ❌ Error loading page: {e}")
+                continue
+
+            # Wait for form fields
+            try:
+                page.wait_for_selector('input[name*="first" i], input[type="email" i]', timeout=10000)
+                print("   ✅ Page ready – form fields detected.")
+            except Exception:
+                print("   ⚠️ No form fields found – skipping (maybe login required).")
+                # If this is the first job, you might need to log in manually now
+                if i == 0:
+                    print("\n🔐 If you see a login page, please log in manually now.")
+                    input("   ➡️ Press ENTER after you have logged in and the form is ready...")
+                    page.goto(link, wait_until="domcontentloaded")
+                    time.sleep(2)
                 else:
-                    print("\nOkay, they are safely saved in your CSV. Catch you next time! 👋\n")
-                    choice = 'exit'
+                    continue
 
-    if choice in ['apply', 'all']:
+            # Auto‑fill (same as before)
+            safe_first = json.dumps(MY_PROFILE.get("first_name", ""))
+            safe_last = json.dumps(MY_PROFILE.get("last_name", ""))
+            safe_email = json.dumps(MY_PROFILE.get("email", ""))
+            safe_phone = json.dumps(MY_PROFILE.get("phone", ""))
+            safe_linkedin = json.dumps(MY_PROFILE.get("linkedin", ""))
+
+            js = f"""
+            () => {{
+                const setVal = (sel, value) => {{
+                    if(!value) return;
+                    const fields = document.querySelectorAll(sel);
+                    fields.forEach(el => {{
+                        el.value = value;
+                        el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                        el.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    }});
+                    return fields.length;
+                }};
+                let filled = 0;
+                filled += setVal('input[name*="first" i], input[id*="first" i], input[placeholder*="first" i]', {safe_first});
+                filled += setVal('input[name*="last" i], input[id*="last" i], input[placeholder*="last" i]', {safe_last});
+                filled += setVal('input[type="email" i], input[name*="email" i]', {safe_email});
+                filled += setVal('input[type="tel" i], input[name*="phone" i]', {safe_phone});
+                filled += setVal('input[name*="linkedin" i], input[name*="url" i]', {safe_linkedin});
+                return filled;
+            }}
+            """
+            try:
+                filled_count = page.evaluate(js)
+                if filled_count > 0:
+                    print(f"   ✅ Auto‑fill executed ({filled_count} fields).")
+                else:
+                    print("   ⚠️ Auto‑fill found no matching fields – you'll need to fill manually.")
+            except Exception as e:
+                print(f"   ⚠️ Auto‑fill evaluation failed: {e}")
+
+            # Upload resume (to all file inputs)
+            resume_path = MY_PROFILE.get("resume_path", "")
+            if resume_path and os.path.exists(resume_path):
+                try:
+                    file_inputs = page.query_selector_all('input[type="file"]')
+                    if file_inputs:
+                        for inp in file_inputs:
+                            inp.set_input_files(resume_path)
+                        print(f"   📎 Resume uploaded to {len(file_inputs)} file field(s).")
+                    else:
+                        print("   ⚠️ No file upload field found – skip resume upload.")
+                except Exception as e:
+                    print(f"   ⚠️ Resume upload failed: {e}")
+            else:
+                print(f"   ⚠️ Resume not found at: {resume_path} – please upload manually.")
+
+            # Wait for user to complete
+            print("\n" + "─"*50)
+            print("✅ Auto‑fill completed (where possible).")
+            print("   Please:")
+            print("   • Review and correct any missing/wrong fields")
+            print("   • Complete multi‑page forms (Next buttons)")
+            print("   • Upload additional documents if required")
+            print("   • Click the FINAL SUBMIT button")
+            print("─"*50)
+            input("➡️ Press ENTER after you have FULLY SUBMITTED this application → ")
+
+        context.close()
         print("\n" + "━"*60)
-        print(" 🚀 READY TO APPLY")
+        print(" 🏁 All jobs processed. Good luck!")
         print("━"*60)
-        print("⚠️ Heads up: Each job will open in a new browser window.\n")
-        print(" I will auto-fill:")
-        print("  • Name, Email, Phone")
-        print("  • Links (LinkedIn, GitHub, Portfolio)\n")
-        print(" You will still control:")
-        print("  • Uploading missing documents (if needed)")
-        print("  • Answering custom/company-specific questions")
-        print("  • Clicking the final 'Submit' button\n")
-        
-        proceed = input("Continue? (yes/no): ").strip().lower()
-        if proceed in ['y', 'yes']:
-            human_in_the_loop_apply()             
-            print("\n" + "━"*60)
-            print(" 🏁 Session Complete!")
-            print("━"*60)
-            print("💡 Tip: New jobs are posted daily. Run this every morning to stay ahead of other applicants.")
-            print("See you tomorrow 👋\n")
-        else:
-            print("\nApplication phase aborted. Catch you next time! 👋\n")
